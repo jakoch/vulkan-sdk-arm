@@ -57,7 +57,7 @@ jobs:
 
     steps:
       - name: 🤘 Checkout Code
-        uses: actions/checkout@v6 # https://github.com/actions/checkout
+        uses: actions/checkout@v7 # https://github.com/actions/checkout
 
       - name: 🔽 Setup Build Environment
         run: |
@@ -178,7 +178,7 @@ jobs:
           ls -la
 
       - name: 📦 🚀Upload Artifact Vulkan SDK
-        uses: actions/upload-artifact@v6 # https://github.com/actions/upload-artifact
+        uses: actions/upload-artifact@v7 # https://github.com/actions/upload-artifact
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: /opt/vulkan-sdk/${{ env.ARTIFACT_FILENAME }}
