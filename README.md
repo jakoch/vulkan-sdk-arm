@@ -6,8 +6,9 @@
 This repository contains a Github Action workflow, which builds the Vulkan SDK for ARM64 runners.
 
 The SDK is build on the following runners:
-- [ubuntu-22.04-arm](https://github.com/actions/partner-runner-images/blob/main/images/arm-ubuntu-22-image.md)
-- [ubuntu-24.04-arm](https://github.com/actions/partner-runner-images/blob/main/images/arm-ubuntu-24-image.md)
+- [ubuntu-22.04-arm](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2204-Arm64-Readme.md)
+- [ubuntu-24.04-arm](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Arm64-Readme.md)
+- [ubuntu-26.04-arm](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2604-Arm64-Readme.md)
 
 The existing x86_64 binaries in the Vulkan SDK are replaced with aarch64 binaries.
 
