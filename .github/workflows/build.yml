@@ -41,12 +41,14 @@ jobs:
     # Do not run the workflow if the actor is dependabot or if the PR is from a fork.
     if: ${{ ! (startsWith(github.actor, 'dependabot') || github.event.pull_request.head.repo.fork ) }}
 
+    # https://github.com/actions/runner-images#available-images
     strategy:
       fail-fast: false
       matrix:
         OS:
           - ubuntu-22.04-arm
           - ubuntu-24.04-arm
+          - ubuntu-26.04-arm
 
     # "contents: write" allows the action to create a release
     # this is required by the release step, which uses "gh release create"
@@ -64,11 +66,16 @@ jobs:
             sudo apt install cmake ninja-build gcc-12 g++-12 bison ocaml-core xz-utils pkg-config python3-pip -y
             sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
             sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
-            fi
+          fi
           if [[ "${{ matrix.OS }}" == "ubuntu-24.04-arm" ]]; then
             sudo apt install cmake ninja-build gcc-14 g++-14 bison ocaml-core xz-utils pkg-config python3-pip -y
             sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
             sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          fi
+          if [[ "${{ matrix.OS }}" == "ubuntu-26.04-arm" ]]; then
+            sudo apt install cmake ninja-build gcc-15 g++-15 bison ocaml-core xz-utils pkg-config python3-pip -y
+            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100
+            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-15 100
           fi
 
       - name: 🔽 Setup Build Environment Python
