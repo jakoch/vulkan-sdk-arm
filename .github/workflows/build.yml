@@ -123,6 +123,9 @@ jobs:
           ls -la
           ls -la $VK_SDK_LATEST_VERSION
 
+      # For the list of vulkansdk script options see section "Helper build script":
+      # https://vulkan.lunarg.com/doc/sdk/1.4.350.1/linux/getting_started.html
+      # Run ./vulkansdk help for available options.
       - name: 🙏 Build Vulkan SDK
         working-directory: /opt/vulkan-sdk
         run: |
@@ -135,17 +138,20 @@ jobs:
             shaderc
 
 # do we need to build the following?
-#  headers \
-#  loader \
-#  layers \
-#  spirv-tools \
-#  glslang \
-#  spirv-cross \
-#  gfxrecon \
-#  spirv-reflect \
-#  vulkan-profiles \
-#  volk \
-#  vma \
+# lunarg-tools
+# gfxreconstruct
+# glslang
+# spirv-tools
+# spirv-cross
+# spirv-reflect
+# vulkan-profiles
+# volk
+# vma
+# vcv
+# jsoncpp
+# vul
+# cdl
+# slang
 
       - name: ✂ Remove pre-built x86_64 and sources
         working-directory: /opt/vulkan-sdk
