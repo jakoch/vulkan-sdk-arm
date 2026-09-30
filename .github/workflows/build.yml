@@ -46,7 +46,9 @@ jobs:
       fail-fast: false
       matrix:
         OS:
-          - ubuntu-22.04-arm
+          # SPIRV-Tools fails to build with GCC12 on Ubuntu 22, which ships GNU C++: 10.5.0, 11.4.0, 12.3.0.
+          # But GCC 15 is required: https://github.com/KhronosGroup/SPIRV-Tools#tools-youll-need . Disabled.
+          #- ubuntu-22.04-arm
           - ubuntu-24.04-arm
           - ubuntu-26.04-arm
 
