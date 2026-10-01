@@ -46,9 +46,6 @@ jobs:
       fail-fast: false
       matrix:
         OS:
-          # SPIRV-Tools fails to build with GCC12 on Ubuntu 22, which ships GNU C++: 10.5.0, 11.4.0, 12.3.0.
-          # But GCC 15 is required: https://github.com/KhronosGroup/SPIRV-Tools#tools-youll-need . Disabled.
-          #- ubuntu-22.04-arm
           - ubuntu-24.04-arm
           - ubuntu-26.04-arm
 
@@ -64,11 +61,6 @@ jobs:
       - name: 🔽 Setup Build Environment
         run: |
           sudo apt-get update
-          if [[ "${{ matrix.OS }}" == "ubuntu-22.04-arm" ]]; then
-            sudo apt install cmake ninja-build gcc-12 g++-12 bison ocaml-core xz-utils pkg-config python3-pip -y
-            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
-            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
-          fi
           if [[ "${{ matrix.OS }}" == "ubuntu-24.04-arm" ]]; then
             sudo apt install cmake ninja-build gcc-14 g++-14 bison ocaml-core xz-utils pkg-config python3-pip -y
             sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -164,11 +156,9 @@ jobs:
           rm -r $VK_SDK_LATEST_VERSION/source
 
       # ARTIFACT_RELEASE_NAME = vulkansdk-arm-1.2.3.4               - used for the release name
-      # ARTIFACT_NAME         = vulkansdk-ubuntu-22.04-arm-1.2.3.4         - used for the artifact name
-      # ARTIFACT_FILENAME     = vulkansdk-ubuntu-22.04-arm-1.2.3.4.tar.xz  - used for the artifact filename
+      # ARTIFACT_NAME         = vulkansdk-ubuntu-24.04-arm-1.2.3.4         - used for the artifact name
+      # ARTIFACT_FILENAME     = vulkansdk-ubuntu-24.04-arm-1.2.3.4.tar.xz  - used for the artifact filename
       # The ARTIFACT_RELEASE_NAME does not contain the OS distribution version.
-      # This allows to create a single release for all Ubuntu distributions and
-      # publish two artifacts, one for each Ubuntu distribution (20.04, 24.04).
       # The ARTIFACT_NAME and ARTIFACT_FILENAME contain the OS distribution version.
       - name: 📑 Create Name for Release Artifact
         run: |
@@ -176,7 +166,7 @@ jobs:
           echo "ARTIFACT_NAME=vulkansdk-${{ matrix.OS }}-${{ env.VK_SDK_LATEST_VERSION }}" >> $GITHUB_ENV
           echo "ARTIFACT_FILENAME=vulkansdk-${{ matrix.OS }}-${{ env.VK_SDK_LATEST_VERSION }}.tar.xz" >> $GITHUB_ENV
 
-      # Artifact name: vulkansdk-ubuntu-22.04-arm-1.2.3.4.tar.xz
+      # Artifact name: vulkansdk-ubuntu-24.04-arm-1.2.3.4.tar.xz
       # We are packaging the Vulkan SDK into a tar.xz archive.
       # The archive contains the Vulkan SDK version as top-level directory.
       - name: 📦 Package Vulkan SDK
