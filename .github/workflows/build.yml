@@ -35,8 +35,8 @@ jobs:
 
 # -----------------------------------------------------------------------------
 
-    name: Build on ${{ matrix.OS }}
-    runs-on: ${{ matrix.OS }}
+    name: Build on Ubuntu ${{ matrix.DISTRO }} ARM
+    runs-on: ${{ matrix.RUNNER }}
 
     # Do not run the workflow if the actor is dependabot or if the PR is from a fork.
     if: ${{ ! (startsWith(github.actor, 'dependabot') || github.event.pull_request.head.repo.fork ) }}
@@ -45,9 +45,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        OS:
-          - ubuntu-24.04-arm
-          - ubuntu-26.04-arm
+        include:
+          # Ubuntu 22.04 ARM runners are not supported: SPIRV-Tools requires
+          # GCC 15, while Ubuntu 22.04 only ships GCC 12.
+          - RUNNER: ubuntu-24.04-arm
+            DISTRO: "24.04"
+            GCC: 14
+          - RUNNER: ubuntu-26.04-arm
+            DISTRO: "26.04"
+            GCC: 15
 
     # "contents: write" allows the action to create a release
     # this is required by the release step, which uses "gh release create"
@@ -61,16 +67,14 @@ jobs:
       - name: 🔽 Setup Build Environment
         run: |
           sudo apt-get update
-          if [[ "${{ matrix.OS }}" == "ubuntu-24.04-arm" ]]; then
-            sudo apt install cmake ninja-build gcc-14 g++-14 bison ocaml-core xz-utils pkg-config python3-pip -y
-            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
-            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-          fi
-          if [[ "${{ matrix.OS }}" == "ubuntu-26.04-arm" ]]; then
-            sudo apt install cmake ninja-build gcc-15 g++-15 bison ocaml-core xz-utils pkg-config python3-pip -y
-            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100
-            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-15 100
-          fi
+          sudo apt install cmake ninja-build gcc-${{ matrix.GCC }} g++-${{ matrix.GCC }} \
+            bison ocaml-core xz-utils pkg-config python3-pip -y
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${{ matrix.GCC }} 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${{ matrix.GCC }} 100
+          sudo update-alternatives --set gcc /usr/bin/gcc-${{ matrix.GCC }}
+          sudo update-alternatives --set g++ /usr/bin/g++-${{ matrix.GCC }}
+          gcc --version
+          g++ --version
 
       - name: 🔽 Setup Build Environment Python
         run: |
@@ -155,7 +159,7 @@ jobs:
           ls -la $VK_SDK_LATEST_VERSION/source
           rm -r $VK_SDK_LATEST_VERSION/source
 
-      # ARTIFACT_RELEASE_NAME = vulkansdk-arm-1.2.3.4               - used for the release name
+      # ARTIFACT_RELEASE_NAME = vulkansdk-arm-1.2.3.4                      - used for the release name
       # ARTIFACT_NAME         = vulkansdk-ubuntu-24.04-arm-1.2.3.4         - used for the artifact name
       # ARTIFACT_FILENAME     = vulkansdk-ubuntu-24.04-arm-1.2.3.4.tar.xz  - used for the artifact filename
       # The ARTIFACT_RELEASE_NAME does not contain the OS distribution version.
@@ -163,8 +167,8 @@ jobs:
       - name: 📑 Create Name for Release Artifact
         run: |
           echo "ARTIFACT_RELEASE_NAME=vulkansdk-arm-${{ env.VK_SDK_LATEST_VERSION }}" >> $GITHUB_ENV
-          echo "ARTIFACT_NAME=vulkansdk-${{ matrix.OS }}-${{ env.VK_SDK_LATEST_VERSION }}" >> $GITHUB_ENV
-          echo "ARTIFACT_FILENAME=vulkansdk-${{ matrix.OS }}-${{ env.VK_SDK_LATEST_VERSION }}.tar.xz" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=vulkansdk-ubuntu-${{ matrix.DISTRO }}-arm-${{ env.VK_SDK_LATEST_VERSION }}" >> $GITHUB_ENV
+          echo "ARTIFACT_FILENAME=vulkansdk-ubuntu-${{ matrix.DISTRO }}-arm-${{ env.VK_SDK_LATEST_VERSION }}.tar.xz" >> $GITHUB_ENV
 
       # Artifact name: vulkansdk-ubuntu-24.04-arm-1.2.3.4.tar.xz
       # We are packaging the Vulkan SDK into a tar.xz archive.
