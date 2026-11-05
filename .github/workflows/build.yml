@@ -9,7 +9,17 @@ name: "🛠️ Build Vulkan SDK ARM"
 on:
   # You can manually run this workflow.
   workflow_dispatch:
-  # Run the workflow on Pull Requests.
+    inputs:
+      version:
+        description: "Vulkan SDK version to build (default: latest Linux version from LunarG)"
+        required: false
+        type: string
+      release:
+        description: "Create or update the GitHub release"
+        required: false
+        type: boolean
+        default: true
+  # Run the workflow on Pull Requests (build only, no release).
   pull_request:
   # Run the workflow for changes to main and release branch.
   push:
@@ -18,41 +28,174 @@ on:
     - 'releases/*'
     tags:
     - '*.*.*.*'
+  # Poll LunarG every 6 hours for a new SDK release.
+  # A cheap check job skips the build when the release is already complete.
   schedule:
-    # Run the workflow weekly on Sunday at 00:00 UTC.
-    - cron: '0 0 * * 0'
+    - cron: '0 */6 * * *'
 
-# Cancel in-progress jobs when pushing to the same branch.
+# Cancel stale PR builds, but let scheduled/manual builds finish.
 concurrency:
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
   group: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
 
 jobs:
 
 # -----------------------------------------------------------------------------
+# Resolve the version to build and decide whether a build/release is needed.
+# -----------------------------------------------------------------------------
+
+  check:
+
+    name: Check for new Vulkan SDK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      latest: ${{ steps.resolve.outputs.latest }}
+      should_build: ${{ steps.resolve.outputs.should_build }}
+      should_release: ${{ steps.resolve.outputs.should_release }}
+      matrix: ${{ steps.resolve.outputs.matrix }}
+
+    steps:
+      - name: 🔍 Resolve version and build plan
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_RELEASE: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+
+          # Supported Ubuntu ARM runners. Used for both the build matrix and
+          # the expected release asset names.
+          MATRIX='{"include":[{"RUNNER":"ubuntu-24.04-arm","DISTRO":"24.04","GCC":14},{"RUNNER":"ubuntu-26.04-arm","DISTRO":"26.04","GCC":15}]}'
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+          expected_assets() {
+            echo "$MATRIX" | jq -r --arg v "$1" \
+              '.include[] | "vulkansdk-ubuntu-\(.DISTRO)-arm-\($v).tar.xz"'
+          }
+
+          # A release is complete when it is published and has every expected asset.
+          # Draft, missing, and partially uploaded releases return non-zero so the
+          # scheduled run rebuilds and republishes them.
+          release_is_complete() {
+            local version="$1" json draft assets asset
+            json=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${version}" 2>/dev/null || true)
+            if [[ -z "$json" ]]; then
+              return 1
+            fi
+            draft=$(jq -r '.draft // false' <<< "$json")
+            if [[ "$draft" == "true" ]]; then
+              return 1
+            fi
+            assets=$(jq -r '.assets[]?.name' <<< "$json")
+            while IFS= read -r asset; do
+              [[ -z "$asset" ]] && continue
+              if ! grep -qxF "$asset" <<< "$assets"; then
+                echo "Missing release asset: $asset"
+                return 1
+              fi
+            done < <(expected_assets "$version")
+            return 0
+          }
+
+          LATEST_VK=$(curl -fsSL https://vulkan.lunarg.com/sdk/latest/linux.json | jq -r '.linux')
+          if [[ -z "$LATEST_VK" || "$LATEST_VK" == "null" ]]; then
+            echo "::error::Could not determine the latest Vulkan SDK version from LunarG."
+            exit 1
+          fi
+          GH_LATEST_TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)
+
+          VERSION="$LATEST_VK"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && -n "${INPUT_VERSION:-}" ]]; then
+            VERSION="$INPUT_VERSION"
+          elif [[ "$EVENT_NAME" == "push" && "$REF_TYPE" == "tag" ]]; then
+            VERSION="$REF_NAME"
+          fi
+          # Allow "latest" to be passed as the manual version input.
+          if [[ "$VERSION" == "latest" ]]; then
+            VERSION="$LATEST_VK"
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            echo "::error::Invalid Vulkan SDK version: '$VERSION'"
+            exit 1
+          fi
+
+          SHOULD_BUILD=false
+          SHOULD_RELEASE=false
+
+          case "$EVENT_NAME" in
+            pull_request)
+              SHOULD_BUILD=true
+              ;;
+            push)
+              if [[ "$REF_TYPE" == "tag" ]]; then
+                SHOULD_BUILD=true
+                SHOULD_RELEASE=true
+              elif ! release_is_complete "$VERSION"; then
+                SHOULD_BUILD=true
+                SHOULD_RELEASE=true
+              fi
+              ;;
+            workflow_dispatch)
+              SHOULD_BUILD=true
+              SHOULD_RELEASE="${INPUT_RELEASE:-true}"
+              ;;
+            schedule)
+              if ! release_is_complete "$VERSION"; then
+                SHOULD_BUILD=true
+                SHOULD_RELEASE=true
+              fi
+              ;;
+          esac
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST_VK" >> "$GITHUB_OUTPUT"
+          echo "should_build=$SHOULD_BUILD" >> "$GITHUB_OUTPUT"
+          echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Vulkan SDK build plan"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| LunarG latest | \`$LATEST_VK\` |"
+            echo "| GitHub latest | \`${GH_LATEST_TAG:-none}\` |"
+            echo "| Resolved version | \`$VERSION\` |"
+            echo "| Build | \`$SHOULD_BUILD\` |"
+            echo "| Release | \`$SHOULD_RELEASE\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+# -----------------------------------------------------------------------------
+# Build the SDK for each supported Ubuntu ARM runner.
+# -----------------------------------------------------------------------------
 
   build:
 
-# -----------------------------------------------------------------------------
-
-    name: Build on ${{ matrix.OS }}
-    runs-on: ${{ matrix.OS }}
-
-    # Do not run the workflow if the actor is dependabot or if the PR is from a fork.
-    if: ${{ ! (startsWith(github.actor, 'dependabot') || github.event.pull_request.head.repo.fork ) }}
-
-    # https://github.com/actions/runner-images#available-images
+    name: Build Ubuntu ${{ matrix.DISTRO }} ARM
+    needs: check
+    # Do not run for dependabot or for pull requests from forks.
+    if: |
+      needs.check.outputs.should_build == 'true' &&
+      !(startsWith(github.actor, 'dependabot') ||
+        (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork))
+    runs-on: ${{ matrix.RUNNER }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
-      matrix:
-        OS:
-          - ubuntu-24.04-arm
-          - ubuntu-26.04-arm
-
-    # "contents: write" allows the action to create a release
-    # this is required by the release step, which uses "gh release create"
-    permissions:
-      contents: write
+      matrix: ${{ fromJSON(needs.check.outputs.matrix) }}
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
 
     steps:
       - name: 🤘 Checkout Code
@@ -61,16 +204,14 @@ jobs:
       - name: 🔽 Setup Build Environment
         run: |
           sudo apt-get update
-          if [[ "${{ matrix.OS }}" == "ubuntu-24.04-arm" ]]; then
-            sudo apt install cmake ninja-build gcc-14 g++-14 bison ocaml-core xz-utils pkg-config python3-pip -y
-            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
-            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-          fi
-          if [[ "${{ matrix.OS }}" == "ubuntu-26.04-arm" ]]; then
-            sudo apt install cmake ninja-build gcc-15 g++-15 bison ocaml-core xz-utils pkg-config python3-pip -y
-            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100
-            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-15 100
-          fi
+          sudo apt install cmake ninja-build gcc-${{ matrix.GCC }} g++-${{ matrix.GCC }} \
+            bison ocaml-core xz-utils pkg-config python3-pip -y
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${{ matrix.GCC }} 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${{ matrix.GCC }} 100
+          sudo update-alternatives --set gcc /usr/bin/gcc-${{ matrix.GCC }}
+          sudo update-alternatives --set g++ /usr/bin/g++-${{ matrix.GCC }}
+          gcc --version
+          g++ --version
 
       - name: 🔽 Setup Build Environment Python
         run: |
@@ -85,37 +226,18 @@ jobs:
           libx11-xcb-dev liblz4-dev libzstd-dev \
           libxml2-dev wayland-protocols
 
-      - name: 🔍 Get latest version of Vulkan SDK
-        run: echo "VK_SDK_LATEST_VERSION=$(curl -s https://vulkan.lunarg.com/sdk/latest/linux.json | jq -r '.linux')" >> $GITHUB_ENV
-
-      - name: 🔍 Get latest version of vulkan-sdk-arm on Github Releases
-        run: echo "GH_LATEST_RELEASE_VERSION=$(curl -s https://api.github.com/repos/jakoch/vulkan-sdk-arm/releases/latest | jq -r '.tag_name')" >> $GITHUB_ENV
-
-      # Check if there is no existing release or if the latest version is different
-      # -z "$GH_LATEST_RELEASE_VERSION":
-      #  is true if GH_LATEST_RELEASE_VERSION is null or empty
-      # "$VK_SDK_LATEST_VERSION" != "$GH_LATEST_RELEASE_VERSION":
-      #  is true if the latest SDK version is different from the latest release version
-      - name: 🔍 Check if the Vulkan SDK version is newer than the released version
-        id: check_version
-        run: |
-          if [ -z "$GH_LATEST_RELEASE_VERSION" ] || [ "$VK_SDK_LATEST_VERSION" != "$GH_LATEST_RELEASE_VERSION" ]; then
-            echo "NEW_VK_SDK_VERSION=true" >> $GITHUB_ENV
-          else
-            echo "NEW_VK_SDK_VERSION=false" >> $GITHUB_ENV
-          fi
-
       - name: 📂 Create build directory
         run: mkdir -p /opt/vulkan-sdk
 
       - name: 🔽 Download Vulkan SDK
         working-directory: /opt/vulkan-sdk
         run: |
-          curl -o vulkan-sdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz
+          curl -fLo vulkan-sdk.tar.xz \
+            "https://sdk.lunarg.com/sdk/download/${VERSION}/linux/vulkan-sdk.tar.xz"
           tar -xJf vulkan-sdk.tar.xz
           rm vulkan-sdk.tar.xz
-          ls -la
-          ls -la $VK_SDK_LATEST_VERSION
+          test -d "$VERSION"
+          ls -la "$VERSION"
 
       # For the list of vulkansdk script options see section "Helper build script":
       # https://vulkan.lunarg.com/doc/sdk/1.4.350.1/linux/getting_started.html
@@ -123,7 +245,7 @@ jobs:
       - name: 🙏 Build Vulkan SDK
         working-directory: /opt/vulkan-sdk
         run: |
-          cd $VK_SDK_LATEST_VERSION
+          cd "$VERSION"
           ./vulkansdk --skip-deps --maxjobs \
             vulkan-loader \
             vulkan-validationlayers \
@@ -150,21 +272,18 @@ jobs:
       - name: ✂ Remove pre-built x86_64 and sources
         working-directory: /opt/vulkan-sdk
         run: |
-          ls -la $VK_SDK_LATEST_VERSION/x86_64
-          rm -r $VK_SDK_LATEST_VERSION/x86_64
-          ls -la $VK_SDK_LATEST_VERSION/source
-          rm -r $VK_SDK_LATEST_VERSION/source
+          ls -la "$VERSION/x86_64"
+          rm -r "$VERSION/x86_64"
+          ls -la "$VERSION/source"
+          rm -r "$VERSION/source"
 
-      # ARTIFACT_RELEASE_NAME = vulkansdk-arm-1.2.3.4               - used for the release name
-      # ARTIFACT_NAME         = vulkansdk-ubuntu-24.04-arm-1.2.3.4         - used for the artifact name
-      # ARTIFACT_FILENAME     = vulkansdk-ubuntu-24.04-arm-1.2.3.4.tar.xz  - used for the artifact filename
-      # The ARTIFACT_RELEASE_NAME does not contain the OS distribution version.
-      # The ARTIFACT_NAME and ARTIFACT_FILENAME contain the OS distribution version.
+      # ARTIFACT_NAME     = vulkansdk-ubuntu-24.04-arm-1.2.3.4         - used for the artifact name
+      # ARTIFACT_FILENAME = vulkansdk-ubuntu-24.04-arm-1.2.3.4.tar.xz  - used for the artifact filename
+      # The artifact name and filename contain the OS distribution version.
       - name: 📑 Create Name for Release Artifact
         run: |
-          echo "ARTIFACT_RELEASE_NAME=vulkansdk-arm-${{ env.VK_SDK_LATEST_VERSION }}" >> $GITHUB_ENV
-          echo "ARTIFACT_NAME=vulkansdk-${{ matrix.OS }}-${{ env.VK_SDK_LATEST_VERSION }}" >> $GITHUB_ENV
-          echo "ARTIFACT_FILENAME=vulkansdk-${{ matrix.OS }}-${{ env.VK_SDK_LATEST_VERSION }}.tar.xz" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=vulkansdk-ubuntu-${{ matrix.DISTRO }}-arm-${VERSION}" >> "$GITHUB_ENV"
+          echo "ARTIFACT_FILENAME=vulkansdk-ubuntu-${{ matrix.DISTRO }}-arm-${VERSION}.tar.xz" >> "$GITHUB_ENV"
 
       # Artifact name: vulkansdk-ubuntu-24.04-arm-1.2.3.4.tar.xz
       # We are packaging the Vulkan SDK into a tar.xz archive.
@@ -172,10 +291,10 @@ jobs:
       - name: 📦 Package Vulkan SDK
         working-directory: /opt/vulkan-sdk
         run: |
-          tar -cJf $ARTIFACT_FILENAME $VK_SDK_LATEST_VERSION
-          ls -la
+          tar -cJf "$ARTIFACT_FILENAME" "$VERSION"
+          ls -lh "$ARTIFACT_FILENAME"
 
-      - name: 📦 🚀Upload Artifact Vulkan SDK
+      - name: 📦 🚀 Upload Artifact Vulkan SDK
         uses: actions/upload-artifact@v7 # https://github.com/actions/upload-artifact
         with:
           name: ${{ env.ARTIFACT_NAME }}
@@ -183,27 +302,90 @@ jobs:
           compression-level: 0
           retention-days: 3
 
-      # Release if a new Vulkan SDK version is available and the event is a scheduled event,
-      # or if the event is a push with a tag reference.
-      # The release is tagged as "1.2.3.4".
-      # The title is "vulkansdk-arm-1.2.3.4".
-      # Step 1: Create a new release tag, if not exists.
-      - name: 📦 🚀 Create Vulkan SDK Release
-        if: (env.NEW_VK_SDK_VERSION == 'true' && github.event_name == 'schedule') || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
+# -----------------------------------------------------------------------------
+# Publish all artifacts as one complete release.
+# The release is created as a draft, all assets are uploaded, and only then
+# is it published (and marked latest when it matches LunarG's latest version).
+# -----------------------------------------------------------------------------
+
+  release:
+
+    name: Publish Vulkan SDK release
+    needs: [check, build]
+    if: needs.check.outputs.should_release == 'true' && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Download all build artifacts
+        uses: actions/download-artifact@v7 # https://github.com/actions/download-artifact
+        with:
+          pattern: vulkansdk-*
+          merge-multiple: true
+          path: dist
+
+      - name: ✅ Verify artifact set is complete
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.check.outputs.version }}
+          MATRIX: ${{ needs.check.outputs.matrix }}
         run: |
-          if ! gh release view ${{ env.VK_SDK_LATEST_VERSION }} > /dev/null 2>&1; then
-            gh release create ${{ env.VK_SDK_LATEST_VERSION }} \
-              --title "${{ env.ARTIFACT_RELEASE_NAME }}" \
-              --notes "Vulkan SDK for Linux ARM64 (aarch64) ${{ env.VK_SDK_LATEST_VERSION }}" \
-              --latest
+          set -euo pipefail
+          missing=0
+          while IFS= read -r asset; do
+            [[ -z "$asset" ]] && continue
+            if [[ ! -f "dist/$asset" ]]; then
+              echo "::error::Missing build artifact: $asset"
+              missing=1
+            fi
+          done < <(echo "$MATRIX" | jq -r --arg v "$VERSION" '.include[] | "vulkansdk-ubuntu-\(.DISTRO)-arm-\($v).tar.xz"')
+          [[ "$missing" -eq 0 ]] || exit 1
+          ls -lh dist
+
+      - name: 📦 🚀 Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.check.outputs.version }}
+          LATEST: ${{ needs.check.outputs.latest }}
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" dist/*.tar.xz --clobber
+          else
+            gh release create "$VERSION" \
+              --draft \
+              --title "vulkansdk-arm-$VERSION" \
+              --notes "Vulkan SDK for Linux ARM64 (aarch64) $VERSION"
+            gh release upload "$VERSION" dist/*.tar.xz --clobber
           fi
 
-      # Step 2: Upload the artifact to the release tag.
-      - name: 📦 🔼 Upload Vulkan SDK Artifact
-        if: (env.NEW_VK_SDK_VERSION == 'true' && github.event_name == 'schedule') || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
+          # Publish only after every asset has been uploaded.
+          gh release edit "$VERSION" --draft=false
+
+          # Do not mark an older, manually rebuilt version as latest.
+          # Publishing a draft can make it the latest release, so explicitly
+          # clear the flag when this is not LunarG's current version.
+          if [[ "$VERSION" == "$LATEST" ]]; then
+            gh release edit "$VERSION" --latest
+          else
+            gh release edit "$VERSION" --latest=false
+          fi
+
+      - name: ✅ Verify release assets
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.check.outputs.version }}
+          MATRIX: ${{ needs.check.outputs.matrix }}
         run: |
-          gh release upload ${{ env.VK_SDK_LATEST_VERSION }} /opt/vulkan-sdk/${{ env.ARTIFACT_FILENAME }}
+          set -euo pipefail
+          assets=$(gh release view "$VERSION" --json assets --jq '.assets[].name')
+          while IFS= read -r asset; do
+            [[ -z "$asset" ]] && continue
+            if ! grep -qxF "$asset" <<< "$assets"; then
+              echo "::error::Missing release asset: $asset"
+              exit 1
+            fi
+          done < <(echo "$MATRIX" | jq -r --arg v "$VERSION" '.include[] | "vulkansdk-ubuntu-\(.DISTRO)-arm-\($v).tar.xz"')
+          echo "Release $VERSION is complete."
