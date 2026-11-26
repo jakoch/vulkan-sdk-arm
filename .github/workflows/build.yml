@@ -247,27 +247,28 @@ jobs:
         run: |
           cd "$VERSION"
           ./vulkansdk --skip-deps --maxjobs \
+            vulkan-headers \
             vulkan-loader \
-            vulkan-validationlayers \
-            vulkan-extensionlayer \
             vulkan-tools \
-            shaderc
+            vulkan-extensionlayer \
+            vulkan-validationlayers \
+            shaderc \
+            spirv-headers \
+            spirv-tools \
+            spirv-cross \
+            spirv-reflect \
+            dxc \
+            slang \
+            glslang
 
 # do we need to build the following?
-# lunarg-tools
-# gfxreconstruct
-# glslang
-# spirv-tools
-# spirv-cross
-# spirv-reflect
-# vulkan-profiles
-# volk
-# vma
-# vcv
-# jsoncpp
-# vul
-# cdl
-# slang
+# [vulkantools|lunarg-tools]
+# [gfxreconstruct]
+# [Vulkan-Utilities-Library|vul]
+# [volk]
+# [VulkanMemoryAllocator|vma]
+# [VulkanCapsViewer|vcv]
+# [Vulkan-Utilities-Library|vul]
 
       - name: ✂ Remove pre-built x86_64 and sources
         working-directory: /opt/vulkan-sdk
